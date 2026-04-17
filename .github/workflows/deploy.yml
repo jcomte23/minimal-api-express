@@ -15,29 +15,40 @@ jobs:
           host: ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
-          port: ${{ secrets.VM_PORT || 22 }}
+          port: 22
           script: |
-            # Ir al directorio de la app (o clonar si es la primera vez)
-            if [ ! -d "/home/${{ secrets.VM_USER }}/api-mascotas" ]; then
-              cd /home/${{ secrets.VM_USER }}
-              git clone ${{ secrets.REPO_URL }} api-mascotas
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+
+            NOMBRE_APP="${{ github.event.repository.name }}"
+            RUTA_APP="$HOME/$NOMBRE_APP"
+
+            # Clonar si es la primera vez, o hacer pull
+            if [ ! -d "$RUTA_APP" ]; then
+              git clone https://github.com/${{ github.repository }}.git "$RUTA_APP"
+            else
+              cd "$RUTA_APP"
+              git pull origin main
             fi
 
-            cd /home/${{ secrets.VM_USER }}/api-mascotas
-
-            # Traer los últimos cambios
-            git pull origin main
+            cd "$RUTA_APP"
 
             # Instalar dependencias
             npm install --production
 
-            # Instalar PM2 si no está
-            if ! command -v pm2 &> /dev/null; then
-              npm install -g pm2
+            # Crear .env si no existe
+            if [ ! -f .env ]; then
+              echo "⚠️ No se encontró .env — crea uno manualmente en $RUTA_APP/.env"
+              exit 1
             fi
 
-            # Reiniciar o iniciar la app
-            pm2 restart ecosystem.config.js --env production || pm2 start ecosystem.config.js --env production
+            # Reiniciar o iniciar con PM2
+            pm2 describe "$NOMBRE_APP" > /dev/null 2>&1
+            if [ $? -eq 0 ]; then
+              pm2 restart "$NOMBRE_APP"
+            else
+              pm2 start index.js --name "$NOMBRE_APP"
+            fi
 
-            # Guardar el proceso para que sobreviva reinicios
             pm2 save
+            echo "✅ $NOMBRE_APP desplegado correctamente"
