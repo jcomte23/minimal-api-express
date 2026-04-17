@@ -14,7 +14,7 @@ const pool = mysql.createPool({
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
   port: process.env.DB_PORT || 3306,
-  ssl: { rejectUnauthorized: true }, // Azure requiere SSL
+  ssl: process.env.DB_SSL === "true" ? { rejectUnauthorized: false } : false,
   waitForConnections: true,
   connectionLimit: 10,
 });
@@ -108,7 +108,6 @@ app.put("/mascotas/:id", async (req, res) => {
 // PATCH - Actualizar parcialmente una mascota
 app.patch("/mascotas/:id", async (req, res) => {
   try {
-    // Verificar que la mascota existe
     const [mascotas] = await pool.execute("SELECT * FROM mascotas WHERE id = ?", [req.params.id]);
 
     if (mascotas.length === 0) {
@@ -116,19 +115,17 @@ app.patch("/mascotas/:id", async (req, res) => {
     }
 
     const mascotaActual = mascotas[0];
-    const camposPermitidos = ["nombre", "raza", "edad", "foto"];
-    const actualizaciones = {};
-
-    for (const campo of camposPermitidos) {
-      actualizaciones[campo] = req.body[campo] !== undefined ? req.body[campo] : mascotaActual[campo];
-    }
+    const nombre = req.body.nombre ?? mascotaActual.nombre;
+    const raza = req.body.raza ?? mascotaActual.raza;
+    const edad = req.body.edad ?? mascotaActual.edad;
+    const foto = req.body.foto ?? mascotaActual.foto;
 
     await pool.execute(
       "UPDATE mascotas SET nombre = ?, raza = ?, edad = ?, foto = ? WHERE id = ?",
-      [actualizaciones.nombre, actualizaciones.raza, actualizaciones.edad, actualizaciones.foto, req.params.id]
+      [nombre, raza, edad, foto, req.params.id]
     );
 
-    res.json({ id: mascotaActual.id, ...actualizaciones });
+    res.json({ id: mascotaActual.id, nombre, raza, edad, foto });
   } catch (error) {
     res.status(500).json({ mensaje: "Error al actualizar mascota", error: error.message });
   }
@@ -137,7 +134,6 @@ app.patch("/mascotas/:id", async (req, res) => {
 // DELETE - Eliminar una mascota
 app.delete("/mascotas/:id", async (req, res) => {
   try {
-    // Obtener la mascota antes de eliminar
     const [mascotas] = await pool.execute("SELECT * FROM mascotas WHERE id = ?", [req.params.id]);
 
     if (mascotas.length === 0) {
