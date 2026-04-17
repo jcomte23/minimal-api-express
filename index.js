@@ -1,139 +1,174 @@
+require("dotenv").config();
 const express = require("express");
+const mysql = require("mysql2/promise");
+
 const app = express();
 const PUERTO = 3000;
 
-// Middleware para parsear JSON
 app.use(express.json());
 
-// "Base de datos" en memoria
-let mascotas = [
-  {
-    id: 1,
-    nombre: "Firulais",
-    raza: "Labrador",
-    edad: 3,
-    foto: "https://images.unsplash.com/photo-1552053831-71594a27632d?w=400",
-  },
-  {
-    id: 2,
-    nombre: "Michi",
-    raza: "Siamés",
-    edad: 2,
-    foto: "https://images.unsplash.com/photo-1514888286974-6c03e2ca1dba?w=400",
-  },
-  {
-    id: 3,
-    nombre: "Rocky",
-    raza: "Bulldog",
-    edad: 5,
-    foto: "https://images.unsplash.com/photo-1583511655857-d19b40a7a54e?w=400",
-  },
-];
+// Pool de conexiones a MySQL
+const pool = mysql.createPool({
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
+  port: process.env.DB_PORT || 3306,
+  ssl: { rejectUnauthorized: true }, // Azure requiere SSL
+  waitForConnections: true,
+  connectionLimit: 10,
+});
 
-let siguienteId = 4;
+// Crear la tabla si no existe al iniciar
+async function inicializarDB() {
+  const sql = `
+    CREATE TABLE IF NOT EXISTS mascotas (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      nombre VARCHAR(100) NOT NULL,
+      raza VARCHAR(100) NOT NULL,
+      edad INT NOT NULL,
+      foto VARCHAR(500)
+    )
+  `;
+  await pool.execute(sql);
+  console.log("✅ Tabla 'mascotas' lista");
+}
 
 // GET - Obtener todas las mascotas
-app.get("/mascotas", (req, res) => {
-  res.json(mascotas);
+app.get("/mascotas", async (req, res) => {
+  try {
+    const [mascotas] = await pool.execute("SELECT * FROM mascotas");
+    res.json(mascotas);
+  } catch (error) {
+    res.status(500).json({ mensaje: "Error al obtener mascotas", error: error.message });
+  }
 });
 
 // GET - Obtener una mascota por ID
-app.get("/mascotas/:id", (req, res) => {
-  const mascota = mascotas.find((m) => m.id === parseInt(req.params.id));
+app.get("/mascotas/:id", async (req, res) => {
+  try {
+    const [mascotas] = await pool.execute("SELECT * FROM mascotas WHERE id = ?", [req.params.id]);
 
-  if (!mascota) {
-    return res.status(404).json({ mensaje: "Mascota no encontrada" });
+    if (mascotas.length === 0) {
+      return res.status(404).json({ mensaje: "Mascota no encontrada" });
+    }
+
+    res.json(mascotas[0]);
+  } catch (error) {
+    res.status(500).json({ mensaje: "Error al obtener mascota", error: error.message });
   }
-
-  res.json(mascota);
 });
 
 // POST - Crear una nueva mascota
-app.post("/mascotas", (req, res) => {
-  const { nombre, raza, edad, foto } = req.body;
+app.post("/mascotas", async (req, res) => {
+  try {
+    const { nombre, raza, edad, foto } = req.body;
 
-  // Validación básica
-  if (!nombre || !raza || edad === undefined) {
-    return res
-      .status(400)
-      .json({ mensaje: "Los campos nombre, raza y edad son obligatorios" });
+    if (!nombre || !raza || edad === undefined) {
+      return res.status(400).json({ mensaje: "Los campos nombre, raza y edad son obligatorios" });
+    }
+
+    const fotoFinal = foto || "https://images.unsplash.com/photo-1548199973-03cce0bbc87b?w=400";
+
+    const [resultado] = await pool.execute(
+      "INSERT INTO mascotas (nombre, raza, edad, foto) VALUES (?, ?, ?, ?)",
+      [nombre, raza, edad, fotoFinal]
+    );
+
+    res.status(201).json({ id: resultado.insertId, nombre, raza, edad, foto: fotoFinal });
+  } catch (error) {
+    res.status(500).json({ mensaje: "Error al crear mascota", error: error.message });
   }
-
-  const nuevaMascota = {
-    id: siguienteId++,
-    nombre,
-    raza,
-    edad,
-    foto: foto || "https://images.unsplash.com/photo-1548199973-03cce0bbc87b?w=400",
-  };
-
-  mascotas.push(nuevaMascota);
-  res.status(201).json(nuevaMascota);
 });
 
 // PUT - Actualizar una mascota completa
-app.put("/mascotas/:id", (req, res) => {
-  const indice = mascotas.findIndex((m) => m.id === parseInt(req.params.id));
+app.put("/mascotas/:id", async (req, res) => {
+  try {
+    const { nombre, raza, edad, foto } = req.body;
 
-  if (indice === -1) {
-    return res.status(404).json({ mensaje: "Mascota no encontrada" });
+    if (!nombre || !raza || edad === undefined) {
+      return res.status(400).json({ mensaje: "Los campos nombre, raza y edad son obligatorios" });
+    }
+
+    const [resultado] = await pool.execute(
+      "UPDATE mascotas SET nombre = ?, raza = ?, edad = ?, foto = ? WHERE id = ?",
+      [nombre, raza, edad, foto, req.params.id]
+    );
+
+    if (resultado.affectedRows === 0) {
+      return res.status(404).json({ mensaje: "Mascota no encontrada" });
+    }
+
+    res.json({ id: parseInt(req.params.id), nombre, raza, edad, foto });
+  } catch (error) {
+    res.status(500).json({ mensaje: "Error al actualizar mascota", error: error.message });
   }
-
-  const { nombre, raza, edad, foto } = req.body;
-
-  if (!nombre || !raza || edad === undefined) {
-    return res
-      .status(400)
-      .json({ mensaje: "Los campos nombre, raza y edad son obligatorios" });
-  }
-
-  // Reemplaza todo el objeto manteniendo el ID
-  mascotas[indice] = { id: mascotas[indice].id, nombre, raza, edad, foto };
-  res.json(mascotas[indice]);
 });
 
 // PATCH - Actualizar parcialmente una mascota
-app.patch("/mascotas/:id", (req, res) => {
-  const indice = mascotas.findIndex((m) => m.id === parseInt(req.params.id));
+app.patch("/mascotas/:id", async (req, res) => {
+  try {
+    // Verificar que la mascota existe
+    const [mascotas] = await pool.execute("SELECT * FROM mascotas WHERE id = ?", [req.params.id]);
 
-  if (indice === -1) {
-    return res.status(404).json({ mensaje: "Mascota no encontrada" });
-  }
-
-  // Solo actualiza los campos que vengan en el body
-  const camposPermitidos = ["nombre", "raza", "edad", "foto"];
-  const actualizaciones = {};
-
-  for (const campo of camposPermitidos) {
-    if (req.body[campo] !== undefined) {
-      actualizaciones[campo] = req.body[campo];
+    if (mascotas.length === 0) {
+      return res.status(404).json({ mensaje: "Mascota no encontrada" });
     }
-  }
 
-  mascotas[indice] = { ...mascotas[indice], ...actualizaciones };
-  res.json(mascotas[indice]);
+    const mascotaActual = mascotas[0];
+    const camposPermitidos = ["nombre", "raza", "edad", "foto"];
+    const actualizaciones = {};
+
+    for (const campo of camposPermitidos) {
+      actualizaciones[campo] = req.body[campo] !== undefined ? req.body[campo] : mascotaActual[campo];
+    }
+
+    await pool.execute(
+      "UPDATE mascotas SET nombre = ?, raza = ?, edad = ?, foto = ? WHERE id = ?",
+      [actualizaciones.nombre, actualizaciones.raza, actualizaciones.edad, actualizaciones.foto, req.params.id]
+    );
+
+    res.json({ id: mascotaActual.id, ...actualizaciones });
+  } catch (error) {
+    res.status(500).json({ mensaje: "Error al actualizar mascota", error: error.message });
+  }
 });
 
 // DELETE - Eliminar una mascota
-app.delete("/mascotas/:id", (req, res) => {
-  const indice = mascotas.findIndex((m) => m.id === parseInt(req.params.id));
+app.delete("/mascotas/:id", async (req, res) => {
+  try {
+    // Obtener la mascota antes de eliminar
+    const [mascotas] = await pool.execute("SELECT * FROM mascotas WHERE id = ?", [req.params.id]);
 
-  if (indice === -1) {
-    return res.status(404).json({ mensaje: "Mascota no encontrada" });
+    if (mascotas.length === 0) {
+      return res.status(404).json({ mensaje: "Mascota no encontrada" });
+    }
+
+    await pool.execute("DELETE FROM mascotas WHERE id = ?", [req.params.id]);
+    res.json({ mensaje: "Mascota eliminada", mascota: mascotas[0] });
+  } catch (error) {
+    res.status(500).json({ mensaje: "Error al eliminar mascota", error: error.message });
   }
-
-  const eliminada = mascotas.splice(indice, 1)[0];
-  res.json({ mensaje: "Mascota eliminada", mascota: eliminada });
 });
 
 // Iniciar servidor
-app.listen(PUERTO, () => {
-  console.log(`🐾 API de Mascotas corriendo en http://localhost:${PUERTO}`);
-  console.log(`📋 Endpoints disponibles:`);
-  console.log(`   GET    http://localhost:${PUERTO}/mascotas`);
-  console.log(`   GET    http://localhost:${PUERTO}/mascotas/:id`);
-  console.log(`   POST   http://localhost:${PUERTO}/mascotas`);
-  console.log(`   PUT    http://localhost:${PUERTO}/mascotas/:id`);
-  console.log(`   PATCH  http://localhost:${PUERTO}/mascotas/:id`);
-  console.log(`   DELETE http://localhost:${PUERTO}/mascotas/:id`);
-});
+async function iniciar() {
+  try {
+    await inicializarDB();
+    app.listen(PUERTO, () => {
+      console.log(`🐾 API de Mascotas corriendo en http://localhost:${PUERTO}`);
+      console.log(`📋 Endpoints disponibles:`);
+      console.log(`   GET    http://localhost:${PUERTO}/mascotas`);
+      console.log(`   GET    http://localhost:${PUERTO}/mascotas/:id`);
+      console.log(`   POST   http://localhost:${PUERTO}/mascotas`);
+      console.log(`   PUT    http://localhost:${PUERTO}/mascotas/:id`);
+      console.log(`   PATCH  http://localhost:${PUERTO}/mascotas/:id`);
+      console.log(`   DELETE http://localhost:${PUERTO}/mascotas/:id`);
+    });
+  } catch (error) {
+    console.error("❌ Error al conectar con la base de datos:", error.message);
+    process.exit(1);
+  }
+}
+
+iniciar();
